@@ -1,289 +1,74 @@
 import Browser from "webextension-polyfill";
+import { runAction } from "@src/lib/actions";
+import { clearBadge } from "@src/lib/feedback";
+import { ACTION_LABELS, isActionRequest, type ActionId } from "@src/lib/messages";
+import { getSettings, onSettingsChanged } from "@src/lib/settings-store";
+import type { Settings } from "@src/lib/settings";
 
-console.log("Background script loaded");
+type MenuItem = {
+  action: ActionId;
+  setting: keyof Settings;
+  contexts: Browser.Menus.ContextType[];
+};
 
-const CONTEXT_MENU_ITEMS = [
-  { id: "copy_without_formatting", title: "Copy without formatting" },
-  { id: "copy_with_clean_formatting", title: "Copy with clean formatting" },
-  { id: "paste_without_formatting", title: "Paste without formatting" },
+const MENU_ITEMS: MenuItem[] = [
+  // Copy entries only make sense with a selection; paste only where text can go.
+  { action: "copy_plain", setting: "menuCopyPlain", contexts: ["selection"] },
+  { action: "copy_clean", setting: "menuCopyClean", contexts: ["selection"] },
+  { action: "copy_markdown", setting: "menuCopyMarkdown", contexts: ["selection"] },
+  { action: "paste_plain", setting: "menuPastePlain", contexts: ["editable"] },
 ];
 
-function createContextMenuItems() {
-  CONTEXT_MENU_ITEMS.forEach((item) => {
-    Browser.contextMenus.create({
-      id: item.id,
-      title: item.title,
-      contexts: ["all"],
-    });
-  });
-}
+// Startup and a settings change can both ask for a rebuild at once; interleaving
+// removeAll with create throws on duplicate ids, so rebuilds run one at a time.
+let rebuilding: Promise<void> = Promise.resolve();
 
-function handleContextMenuClick(info) {
-  if (info.menuItemId === "copy_without_formatting") {
-    console.log("Copy without formatting clicked");
-    copySelectionWithoutFormatting();
-  } else if (info.menuItemId === "copy_with_clean_formatting") {
-    console.log("Copy with clean formatting clicked");
-    copyWithCleanFormatting();
-  } else if (info.menuItemId === "paste_without_formatting") {
-    console.log("Paste without formatting clicked");
-    pasteWithoutFormatting();
-  }
-}
+function rebuildMenus(): Promise<void> {
+  rebuilding = rebuilding.then(async () => {
+    // removeAll first: menus outlive the service worker, so a bare create()
+    // would throw on duplicate ids the second time around.
+    await Browser.contextMenus.removeAll();
+    const settings = await getSettings();
 
-function handleCommand(command) {
-  if (command === "copy_without_formatting") {
-    console.log("Copy without formatting command triggered");
-    copySelectionWithoutFormatting();
-  } else if (command === "paste_without_formatting") {
-    console.log("Paste without formatting command triggered");
-    pasteWithoutFormatting();
-  }
-}
-
-async function getActiveTab() {
-  const [activeTab] = await Browser.tabs.query({
-    active: true,
-    currentWindow: true,
-  });
-  return activeTab;
-}
-
-async function executeScriptInActiveTab(func, args: unknown[] = []) {
-  const activeTab = await getActiveTab();
-  if (activeTab) {
-    return await Browser.scripting.executeScript({
-      target: { tabId: activeTab.id },
-      func,
-      args,
-    });
-  }
-  return null;
-}
-
-async function copySelectionWithoutFormatting() {
-  try {
-    const results = await executeScriptInActiveTab(() => {
-      const selection = window.getSelection().toString();
-      return selection
-        .replace(/[\r\n]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-    });
-    if (results && results[0]) {
-      const sanitizedText = results[0].result;
-      await writeClipboard(sanitizedText);
-    } else {
-      console.error("Failed to get selection or sanitize text");
+    for (const item of MENU_ITEMS) {
+      if (!settings[item.setting]) continue;
+      Browser.contextMenus.create({
+        id: item.action,
+        title: ACTION_LABELS[item.action],
+        contexts: item.contexts,
+      });
     }
-  } catch (error) {
-    console.error("Error processing selection:", error);
-  }
+  });
+  return rebuilding;
 }
 
-async function copyWithCleanFormatting() {
-  try {
-    const results = await executeScriptInActiveTab(() => {
-      const selection = window.getSelection();
-      if (!selection || selection.rangeCount === 0) {
-        return null;
-      }
-
-      const range = selection.getRangeAt(0);
-      const container = document.createElement("div");
-      container.appendChild(range.cloneContents());
-
-      function cleanNode(node: Node): Node | null {
-        if (node.nodeType === Node.TEXT_NODE) {
-          return node.cloneNode(true);
-        }
-
-        if (node.nodeType !== Node.ELEMENT_NODE) {
-          return null;
-        }
-
-        const el = node as Element;
-        const tagName = el.tagName.toLowerCase();
-
-        // Tags to preserve (semantic formatting)
-        const preserveTags = [
-          "b", "strong", "i", "em", "u", "s", "strike",
-          "ul", "ol", "li", "a", "br", "p", "div", "span", "h1", "h2", "h3", "h4", "h5", "h6"
-        ];
-
-        // Tags to unwrap (remove tag but keep children)
-        const unwrapTags = ["font"];
-
-        let newEl: HTMLElement;
-
-        if (unwrapTags.includes(tagName)) {
-          // For font tags, check if they have formatting we should preserve
-          const fragment = document.createDocumentFragment();
-          let wrapper: HTMLElement | DocumentFragment = fragment;
-
-          // Check for bold via font-weight in style
-          const computedStyle = window.getComputedStyle(el as HTMLElement);
-
-          if (computedStyle.fontWeight === "bold" || parseInt(computedStyle.fontWeight) >= 700) {
-            const bold = document.createElement("b");
-            wrapper.appendChild(bold);
-            wrapper = bold;
-          }
-          if (computedStyle.fontStyle === "italic") {
-            const italic = document.createElement("i");
-            wrapper.appendChild(italic);
-            wrapper = italic;
-          }
-
-          for (const child of Array.from(el.childNodes)) {
-            const cleaned = cleanNode(child);
-            if (cleaned) wrapper.appendChild(cleaned);
-          }
-
-          return fragment.childNodes.length > 0 ? fragment : null;
-        }
-
-        if (preserveTags.includes(tagName)) {
-          if (tagName === "div" || tagName === "span") {
-            // Convert divs/spans to simpler structure
-            const hasBlockDisplay = window.getComputedStyle(el as HTMLElement).display === "block";
-            if (hasBlockDisplay && tagName === "div") {
-              newEl = document.createElement("p");
-            } else {
-              // For spans and inline divs, just keep children
-              const fragment = document.createDocumentFragment();
-              for (const child of Array.from(el.childNodes)) {
-                const cleaned = cleanNode(child);
-                if (cleaned) fragment.appendChild(cleaned);
-              }
-              return fragment.childNodes.length > 0 ? fragment : null;
-            }
-          } else if (tagName === "a") {
-            newEl = document.createElement("a");
-            const href = el.getAttribute("href");
-            if (href) newEl.setAttribute("href", href);
-          } else {
-            newEl = document.createElement(tagName);
-          }
-        } else {
-          // Unknown tag - unwrap and keep children
-          const fragment = document.createDocumentFragment();
-          for (const child of Array.from(el.childNodes)) {
-            const cleaned = cleanNode(child);
-            if (cleaned) fragment.appendChild(cleaned);
-          }
-          return fragment.childNodes.length > 0 ? fragment : null;
-        }
-
-        // Process children
-        for (const child of Array.from(el.childNodes)) {
-          const cleaned = cleanNode(child);
-          if (cleaned) newEl.appendChild(cleaned);
-        }
-
-        // Don't return empty elements (except br)
-        if (newEl.childNodes.length === 0 && tagName !== "br") {
-          return null;
-        }
-
-        return newEl;
-      }
-
-      const cleanedContainer = document.createElement("div");
-      for (const child of Array.from(container.childNodes)) {
-        const cleaned = cleanNode(child);
-        if (cleaned) cleanedContainer.appendChild(cleaned);
-      }
-
-      // Clean up empty paragraphs and normalize whitespace
-      const html = cleanedContainer.innerHTML
-        .replace(/<p>\s*<\/p>/gi, "")
-        .replace(/<p>\s*<br\s*\/?>\s*<\/p>/gi, "<br>")
-        .replace(/(<br\s*\/?>\s*){3,}/gi, "<br><br>")
-        .trim();
-
-      const plainText = selection.toString();
-
-      return { html, plainText };
-    });
-
-    if (results && results[0] && results[0].result) {
-      const { html, plainText } = results[0].result;
-      await writeClipboardWithHtml(html, plainText);
-    } else {
-      console.error("Failed to get selection");
-    }
-  } catch (error) {
-    console.error("Error copying with clean formatting:", error);
-  }
+function isActionId(value: unknown): value is ActionId {
+  return typeof value === "string" && value in ACTION_LABELS;
 }
 
-async function writeClipboard(text) {
-  try {
-    await executeScriptInActiveTab(
-      async (text) => {
-        await navigator.clipboard.writeText(text);
-      },
-      [text]
-    );
-    console.log("Text written to clipboard!");
-  } catch (error) {
-    console.error("Error writing to clipboard:", error);
-  }
+async function initialise(): Promise<void> {
+  // The badge is cleared on a timer, which dies with a suspended worker; without
+  // this a tick or cross can stay pinned to the toolbar indefinitely.
+  await clearBadge();
+  await rebuildMenus();
 }
 
-async function writeClipboardWithHtml(html: string, plainText: string) {
-  try {
-    await executeScriptInActiveTab(
-      async (html: string, plainText: string) => {
-        const htmlBlob = new Blob([html], { type: "text/html" });
-        const textBlob = new Blob([plainText], { type: "text/plain" });
-        const clipboardItem = new ClipboardItem({
-          "text/html": htmlBlob,
-          "text/plain": textBlob,
-        });
-        await navigator.clipboard.write([clipboardItem]);
-      },
-      [html, plainText]
-    );
-    console.log("HTML and text written to clipboard!");
-  } catch (error) {
-    console.error("Error writing HTML to clipboard:", error);
-  }
-}
+Browser.runtime.onInstalled.addListener(() => void initialise());
+Browser.runtime.onStartup.addListener(() => void initialise());
+onSettingsChanged(() => void rebuildMenus());
 
-async function pasteWithoutFormatting() {
-  try {
-    await executeScriptInActiveTab(async () => {
-      const text = await navigator.clipboard.readText();
-      const sanitizedText = text
-        .replace(/[\r\n]+/g, " ")
-        .replace(/\s+/g, " ")
-        .trim();
-      const activeElement = document.activeElement;
-      if (activeElement && typeof activeElement.value !== "undefined") {
-        const start = activeElement.selectionStart;
-        const end = activeElement.selectionEnd;
-        activeElement.value =
-          activeElement.value.substring(0, start) +
-          sanitizedText +
-          activeElement.value.substring(end);
-        activeElement.selectionStart = activeElement.selectionEnd =
-          start + sanitizedText.length;
-      } else if (document.execCommand) {
-        document.execCommand("insertText", false, sanitizedText);
-      }
-    });
-    console.log("Text pasted without formatting!");
-  } catch (error) {
-    console.error("Error pasting text:", error);
-  }
-}
-
-Browser.runtime.onInstalled.addListener(() => {
-  console.log("Extension installed");
-  createContextMenuItems();
+Browser.contextMenus.onClicked.addListener((info) => {
+  if (!isActionId(info.menuItemId)) return;
+  void runAction(info.menuItemId, { frameId: info.frameId });
 });
 
-Browser.contextMenus.onClicked.addListener(handleContextMenuClick);
-Browser.commands.onCommand.addListener(handleCommand);
+Browser.commands.onCommand.addListener((command) => {
+  if (!isActionId(command)) return;
+  void runAction(command);
+});
+
+Browser.runtime.onMessage.addListener((message) => {
+  // Offscreen traffic shares this channel; that listener owns those messages.
+  if (!isActionRequest(message)) return undefined;
+  return runAction(message.action);
+});

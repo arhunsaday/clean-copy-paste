@@ -1,11 +1,16 @@
-declare module '*.svg' {
-  import React = require('react');
-  export const ReactComponent: React.SFC<React.SVGProps<SVGSVGElement>>;
+declare module "*.svg" {
   const src: string;
   export default src;
 }
 
-declare module '*.json' {
-  const content: string;
-  export default content;
+declare module "turndown-plugin-gfm" {
+  import type TurndownService from "turndown";
+
+  type Plugin = TurndownService.Plugin;
+
+  export const gfm: Plugin;
+  export const tables: Plugin;
+  export const strikethrough: Plugin;
+  export const taskListItems: Plugin;
+  export const highlightedCodeBlock: Plugin;
 }

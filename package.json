@@ -1,36 +1,55 @@
 {
   "name": "better-copy-paste",
   "version": "0.0.1",
+  "description": "Copy and paste text without formatting, or as clean HTML or Markdown.",
+  "license": "MIT",
+  "private": true,
+  "packageManager": "pnpm@11.18.0",
+  "engines": {
+    "node": ">=20"
+  },
   "scripts": {
+    "dev": "vite",
+    "dev:firefox": "cross-env BROWSER=firefox vite",
     "build": "vite build",
     "build:chrome": "cross-env BROWSER=chrome vite build",
     "build:firefox": "cross-env BROWSER=firefox vite build",
-    "build:all": "npm run build:chrome && npm run build:firefox",
-    "dev": "vite",
-    "dev:firefox": "cross-env BROWSER=firefox vite",
-    "package:chrome": "npm run build:chrome && node scripts/package.js chrome",
-    "package:firefox": "npm run build:firefox && node scripts/package.js firefox",
-    "package:all": "npm run package:chrome && npm run package:firefox"
+    "build:all": "pnpm run build:chrome && pnpm run build:firefox",
+    "package:chrome": "pnpm run build:chrome && node scripts/package.js chrome",
+    "package:firefox": "pnpm run build:firefox && node scripts/package.js firefox",
+    "package:all": "pnpm run package:chrome && pnpm run package:firefox",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check:injected": "node scripts/check-injected.mjs dist dist-firefox",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts,.tsx",
+    "lint:fix": "eslint . --ext .ts,.tsx --fix",
+    "verify": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run build:all && pnpm run check:injected"
   },
   "type": "module",
   "dependencies": {
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
+    "turndown": "^7.2.4",
+    "turndown-plugin-gfm": "^1.0.2",
     "webextension-polyfill": "^0.11.0"
   },
   "devDependencies": {
     "@crxjs/vite-plugin": "^2.0.0-beta.23",
-    "archiver": "^7.0.1",
-    "cross-env": "^7.0.3",
     "@types/chrome": "^0.0.268",
     "@types/node": "^20.12.11",
     "@types/react": "^18.3.1",
     "@types/react-dom": "^18.3.0",
+    "@types/turndown": "^5.0.6",
     "@types/webextension-polyfill": "^0.10.7",
     "@typescript-eslint/eslint-plugin": "^7.8.0",
     "@typescript-eslint/parser": "^7.8.0",
     "@vitejs/plugin-react": "^4.2.1",
+    "acorn": "^8.18.0",
+    "acorn-walk": "^8.3.5",
+    "archiver": "^7.0.1",
     "autoprefixer": "^10.4.19",
+    "cross-env": "^7.0.3",
     "eslint": "^8.57.0",
     "eslint-config-prettier": "^9.1.0",
     "eslint-plugin-import": "^2.29.1",
@@ -38,11 +57,13 @@
     "eslint-plugin-react": "^7.34.1",
     "eslint-plugin-react-hooks": "^4.6.2",
     "fs-extra": "^11.2.0",
+    "jsdom": "^30.0.1",
     "nodemon": "^3.1.0",
     "postcss": "^8.4.38",
     "tailwindcss": "^3.4.3",
     "ts-node": "^10.9.2",
     "typescript": "^5.4.5",
-    "vite": "^5.2.11"
+    "vite": "^5.2.11",
+    "vitest": "^2.1.9"
   }
 }

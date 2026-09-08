@@ -36,5 +36,6 @@ archive.on("error", (err) => {
 });
 
 archive.pipe(output);
-archive.directory(resolve(rootDir, srcDir), false);
+// .vite/ is bundler metadata; both stores reject or flag unexpected extras.
+archive.glob("**/*", { cwd: resolve(rootDir, srcDir), ignore: [".vite/**"], dot: false });
 archive.finalize();
